@@ -45,82 +45,17 @@ public class WebhookRoute extends RouteBuilder {
         from("platform-http:/webhook/whatsapp?httpMethodRestrict=POST")
                 .routeId("webhook-whatsapp-route")
 
-                .unmarshal().json(WhatsAppMessage.class)
+                .convertBodyTo(String.class)
 
                 .process(exchange -> {
-                    WhatsAppMessage message =
-                            exchange.getMessage().getBody(WhatsAppMessage.class);
+                    String rawBody = exchange.getMessage().getBody(String.class);
 
-                    String phone = message.getPhone();
-                    String text = message.getMessage();
+                    System.out.println("=== BODY REAL RECIBIDO DESDE META ===");
+                    System.out.println(rawBody);
+                    System.out.println("====================================");
 
-                    String currentState = conversationStateService.getState(phone);
-
-                    System.out.println("Telefono: " + phone);
-                    System.out.println("Mensaje: " + text);
-                    System.out.println("Estado actual: " + currentState);
-
-                    if (currentState == null) {
-                        conversationStateService.saveState(phone, "WAITING_DESCRIPTION");
-
-                        exchange.getMessage().setBody("""
-                        {
-                          "respuesta": "Hola, contame qué pasó con el animal."
-                        }
-                        """);
-
-                    } else if ("WAITING_DESCRIPTION".equals(currentState)) {
-
-                        conversationStateService.saveDescription(phone, text);
-                        conversationStateService.saveState(phone, "WAITING_LOCATION");
-
-                        exchange.getMessage().setBody("""
-                        {
-                          "respuesta": "Gracias. ¿Dónde se encuentra el animal?"
-                        }
-                        """);
-
-                    } else if ("WAITING_LOCATION".equals(currentState)) {
-
-                        conversationStateService.saveLocation(phone, text);
-
-                        String description =
-                                conversationStateService.getDescription(phone);
-
-                        String location =
-                                conversationStateService.getLocation(phone);
-                        RescueReport report = new RescueReport(
-                                phone,
-                                description,
-                                location
-                        );
-
-                        exchange.getMessage().setBody(report);
-
-                        exchange.getContext()
-                                .createProducerTemplate()
-                                .send("direct:create-case", exchange);
-
-                        conversationStateService.clearConversation(phone);
-
-                        exchange.getMessage().setBody(""" 
-                        {
-                        "respuesta": "Gracias. Registramos el reporte y será derivado para seguimiento."
-                        }
-                        """);
-
-
-                    } else {
-                        conversationStateService.clearConversation(phone);
-
-                        exchange.getMessage().setBody("""
-                        {
-                          "respuesta": "Reiniciamos la conversación. Escribí nuevamente tu reporte."
-                        }
-                        """);
-                    }
-                })
-
-                .setHeader("Content-Type", constant("application/json"));
+                    exchange.getMessage().setHeader(Exchange.HTTP_RESPONSE_CODE, 200);
+                    exchange.getMessage().setBody("EVENT_RECEIVED");
+                });
     }
 }
