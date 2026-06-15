@@ -1,5 +1,6 @@
 package com.uminas.protectora.routes;
 
+import com.uminas.protectora.model.MetaWebhook;
 import com.uminas.protectora.model.WhatsAppMessage;
 import com.uminas.protectora.model.RescueReport;
 import com.uminas.protectora.service.ConversationStateService;
@@ -45,17 +46,104 @@ public class WebhookRoute extends RouteBuilder {
         from("platform-http:/webhook/whatsapp?httpMethodRestrict=POST")
                 .routeId("webhook-whatsapp-route")
 
-                .convertBodyTo(String.class)
+                .unmarshal().json(MetaWebhook.class)
 
                 .process(exchange -> {
-                    String rawBody = exchange.getMessage().getBody(String.class);
+                    MetaWebhook webhook =
+                            exchange.getMessage().getBody(MetaWebhook.class);
 
-                    System.out.println("=== BODY REAL RECIBIDO DESDE META ===");
-                    System.out.println(rawBody);
-                    System.out.println("====================================");
+                    String phone = webhook.getEntry()
+                            .get(0)
+                            .getChanges()
+                            .get(0)
+                            .getValue()
+                            .getMessages()
+                            .get(0)
+                            .getFrom();
 
-                    exchange.getMessage().setHeader(Exchange.HTTP_RESPONSE_CODE, 200);
-                    exchange.getMessage().setBody("EVENT_RECEIVED");
-                });
+                    String text = webhook.getEntry()
+                            .get(0)
+                            .getChanges()
+                            .get(0)
+                            .getValue()
+                            .getMessages()
+                            .get(0)
+                            .getText()
+                            .getBody();
+
+                    System.out.println("Telefono: " + phone);
+                    System.out.println("Mensaje: " + text);
+
+                    exchange.getMessage().setHeader("phone", phone);
+                    exchange.getMessage().setHeader("text", text);
+                })
+
+                .process(exchange -> {
+                    String phone = exchange.getMessage().getHeader("phone", String.class);
+                    String text = exchange.getMessage().getHeader("text", String.class);
+
+                    String currentState = conversationStateService.getState(phone);
+
+                    System.out.println("Estado actual: " + currentState);
+
+                    if (currentState == null) {
+                        conversationStateService.saveState(phone, "WAITING_DESCRIPTION");
+
+                        exchange.getMessage().setBody("""
+                {
+                  "respuesta": "Hola, contame qué pasó con el animal."
+                }
+                """);
+
+                    } else if ("WAITING_DESCRIPTION".equals(currentState)) {
+
+                        conversationStateService.saveDescription(phone, text);
+                        conversationStateService.saveState(phone, "WAITING_LOCATION");
+
+                        exchange.getMessage().setBody("""
+                {
+                  "respuesta": "Gracias. ¿Dónde se encuentra el animal?"
+                }
+                """);
+
+                    } else if ("WAITING_LOCATION".equals(currentState)) {
+
+                        conversationStateService.saveLocation(phone, text);
+
+                        String description = conversationStateService.getDescription(phone);
+                        String location = conversationStateService.getLocation(phone);
+
+                        RescueReport report = new RescueReport(
+                                phone,
+                                description,
+                                location
+                        );
+
+                        exchange.getMessage().setBody(report);
+
+                        exchange.getContext()
+                                .createProducerTemplate()
+                                .send("direct:create-case", exchange);
+
+                        conversationStateService.clearConversation(phone);
+
+                        exchange.getMessage().setBody("""
+                {
+                  "respuesta": "Gracias. Registramos el reporte y será derivado para seguimiento."
+                }
+                """);
+
+                    } else {
+                        conversationStateService.clearConversation(phone);
+
+                        exchange.getMessage().setBody("""
+                {
+                  "respuesta": "Reiniciamos la conversación. Escribí nuevamente tu reporte."
+                }
+                """);
+                    }
+                })
+
+                .setHeader("Content-Type", constant("application/json"));
     }
 }
